@@ -12,19 +12,25 @@ source("R/01-setup.R")
 
 input_file <- readr::read_csv("data/05-geocode-cleaning/end_inner_join_postmastr_clinician_data.csv") %>%
   dplyr::mutate(id = row_number()) %>%
-  dplyr::filter(postmastr.name.x != "Hye In Park, MD")
+  dplyr::filter(postmastr.name.x != "Hye In Park, MD") %>%
+  dplyr::distinct(here.address, .keep_all = TRUE) %>%
+  filter(postmastr.pm.state == "CO" & postmastr.pm.city == "AURORA")
 
 errors <- test_and_process_isochrones(input_file)
 errors
 
 #Output from the `test_and_process_isochrones` function
 # Filter out the rows that are going to error out after using the test_and_process_isochrones function.
-error_rows <- c(265, 431, 816, 922, 1605, 2049, 2212, 2284, 2308, 2409, 2482, 2735, 2875, 2880, 3150, 3552, 3718)
+error_rows <- c()
 
 # filter out rows with errors.
 input_file_no_error_rows <- input_file %>%
   dplyr::filter(!id %in% error_rows)
 
+# Number of rows of unique physician points * 4 (number of isochrones)
+nrow(input_file_no_error_rows) * 4 # 8,544
+
+# TODO I need to fix the process_and_save_isochrones function to give it a path to save.
 # Call the `process_and_save_isochrones` function with your input_file
 isochrones_sf <- process_and_save_isochrones(input_file_no_error_rows)
 
@@ -32,27 +38,32 @@ isochrones_sf <- process_and_save_isochrones(input_file_no_error_rows)
 dim(isochrones_sf)
 class(isochrones_sf)
 
-isochrones_df <- sf::st_read("data/isochrones/isochrones_all_combined")
+#This takes 15 minutes for some reasons
+isochrones_df <- sf::st_read("data/isochrones/isochrones_ 20231223111020 _chunk_ 1 _to_ 4") %>%
+  dplyr::arrange(desc(rank)) #This is IMPORTANT for the layering.
+  #dplyr::distinct(id, rank, .keep_all = TRUE)
+  #dplyr::select(woe_id, woe_name, latitude, longitude, fips, postal, iso_a2, id, rank, departure, arrival, range) %>% filter(woe_name == "Colorado")
 
 # Clip the isochrones to the USA border.
 usa_borders <- rnaturalearth::ne_states(country = "United States of America", returnclass = "sf") %>%
+  sf::st_set_crs(4326) %>%
+  select(name, iso_a2, woe_id, woe_label, woe_name, latitude, longitude, postal)
+
+isochrones_df <- isochrones_df %>%
   sf::st_set_crs(4326)
 
-isochrones <- isochrones_df %>%
-  sf::st_set_crs(4326)
+invisible(gc())
+isochrones_sf_clipped <- sf::st_intersection(isochrones_df, usa_borders) %>%
+  dplyr::arrange(desc(rank)) #This is IMPORTANT for the layering.
+rm(isochrones_df)
 
-isochrones_sf_clipped <- sf::st_intersection(isochrones, usa_borders)
+isochrones_sf_clipped <- sf::st_make_valid(isochrones_sf_clipped)
+invalid <- st_is_valid(isochrones_sf_clipped, reasons = TRUE)
 
+invisible(gc())
 sf::st_write(
   isochrones_sf_clipped,
-  dsn = "data/isochrones/isochrones_all_combined",
-  layer = "isochrones",
-  driver = "ESRI Shapefile",
-  quiet = FALSE, append = FALSE)
-
-sf::st_write(
-  isochrones_sf_clipped,
-  dsn = "data/06-isochrones/isochrones_all_combined",
+  dsn = "data/06-isochrones/end_isochrones_sf_clipped",
   layer = "isochrones",
   driver = "ESRI Shapefile",
   quiet = FALSE, append = FALSE)
@@ -62,7 +73,8 @@ sf::st_write(
 ######################################
 
 #BASIC MAP
-end_isochrones_sf_clipped <- sf::st_read("data/06-isochrones/isochrones_all_combined")
+end_isochrones_sf_clipped <- sf::st_read("data/06-isochrones/end_isochrones_sf_clipped") %>%
+  dplyr::arrange(desc(rank)) #This is IMPORTANT for the layering.
 
 # Create a basic Leaflet map
 map <- leaflet() %>%
@@ -80,7 +92,4 @@ map <- map %>%
     weight = 1,
     color = "black",
     popup = ~paste("ID: ", id, "<br>Range: ", range, " seconds")
-  )
-
-# Display the map
-map
+  ); map
